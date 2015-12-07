@@ -35,21 +35,12 @@ def get_spectrum(original_signal):
     return fft_signal
 
 
-def get_averaged_cycle(long_signal, long_pip, time_range, plot_all_cycles=False):
+def get_averaged_cycle(signal, pip, time, plot_all_cycles=False):
     # This function identifies a number of complete combustion cycles and returns an average cycle
     """
     Receives a time 'signal(t)', the 'time(t)' coordinate, the frequency indicator 'pip(t)' and the 'time range' of
     interest. Returns an average of the combustion cycles in the selected interval normalized to degrees.
     """
-
-    # Shorten the signal to the specified time interval
-    start, end = time_range[0], time_range[1]
-    start_index = np.where(np.diff(np.sign(long_signal[0] - start)))[0]
-    end_index = np.where(np.diff(np.sign(long_signal[0] - end)))[0]
-    range_indices = np.arange(start_index, end_index)
-    signal = long_signal[1][range_indices]
-    time = long_signal[0][range_indices] - long_signal[0][start_index]
-    pip = long_pip[1][range_indices]
 
     # Get arrays with the indices for every second 'pip' signal
     pip_peaks_list = peakdetect.peakdetect(pip, lookahead=1e3, delta=2e0)[0]
@@ -89,6 +80,18 @@ def get_averaged_cycle(long_signal, long_pip, time_range, plot_all_cycles=False)
         pass
 
     return average_cycle
+
+
+def choose_time_interval(long_signal, long_pip, time_range):
+    # Shorten the signal to the specified time interval
+    start, end = time_range[0], time_range[1]
+    start_index = np.where(np.diff(np.sign(long_signal[0] - start)))[0]
+    end_index = np.where(np.diff(np.sign(long_signal[0] - end)))[0]
+    range_indices = np.arange(start_index, end_index)
+    signal = long_signal[1][range_indices]
+    time = long_signal[0][range_indices] - long_signal[0][start_index]
+    pip = long_pip[1][range_indices]
+    return signal, pip, time
 
 
 def apply_time_offset(original_pair, offset_deg):
@@ -195,7 +198,8 @@ sample_rate = data['sample_rate']
 start_time, end_time = 50, 55
 
 # 1- NORMALIZE TO 720 DEGREES, INTERPOLATE TO A COMMON RESOLUTION AND GET AVERAGE CYCLE
-one_pressure_cycle = get_averaged_cycle(signal_yt, PIP, time_range=[start_time, end_time], plot_all_cycles=False)
+signal, pip, time = choose_time_interval(signal_yt, PIP, time_range=[start_time, end_time])
+one_pressure_cycle = get_averaged_cycle(signal, pip, time, plot_all_cycles=False)
 
 # 2- SHIFT SIGNAL REFERENCE TO tdc=0. ADD AN OFFSET TO GET ZERO PRESSURE AT 540deg
 angle_tdc = 58.8  #  Deg
