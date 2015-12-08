@@ -13,105 +13,73 @@ __author__ = 'alfredoc'
 ###############################################
 
 
-def detect_peak(y_axis, x_axis=None, lookahead=300, delta=0):
+def detect_peak(y_axis, x_axis=None, look_ahead=300, delta=0):
     """
-    Converted from/based on a MATLAB script at:
-    http://billauer.co.il/peakdet.html
+    Detects local peaks and valleys in a signal by evaluating every point in a "look_ahead" radius.
 
-    function for detecting local maximas and minmias in a signal.
-    Discovers peaks by searching for values which are surrounded by lower
-    or larger values for maximas and minimas respectively
-
-    keyword arguments:
-    y_axis -- A list containg the signal over which to find peaks
-    x_axis -- (optional) A x-axis whose values correspond to the y_axis list
-        and is used in the return to specify the postion of the peaks. If
-        omitted an index of the y_axis is used. (default: None)
-    lookahead -- (optional) distance to look ahead from a peak candidate to
-        determine if it is the actual peak (default: 200)
-        '(sample / period) / f' where '4 >= f >= 1.25' might be a good value
+    Syntax:
+    y_axis -- The signal over which peaks or valleys should be found
+    x_axis -- (optional) An x-axis whose values correspond to the y_axis and is used to return the
+              position of the peaks. An index of the y_axis is used if omitted.
+    lookahead -- (optional) distance to look ahead from a peak candidate to determine if it is a peak.
+                 A good tentative value might be: '(sample_rate / period) / f' where '4 >= f >= 1.25'
     delta -- (optional) this specifies a minimum difference between a peak and
-        the following points, before a peak may be considered a peak. Useful
-        to hinder the function from picking up false peaks towards to end of
-        the signal. To work well delta should be set to delta >= RMSnoise * 5.
-        (default: 0)
-            delta function causes a 20% decrease in speed, when omitted
-            Correctly used it can double the speed of the function
-
-    return -- two lists [max_peaks, min_peaks] containing the positive and
-        negative peaks respectively. Each cell of the lists contains a tupple
-        of: (position, peak_value)
+             its surroundings in order to consider it a peak.
+             A good tentative value might be: delta >= RMSnoise * 5.
+    return -- two lists [max_peaks, min_peaks] containing the positive and negative peaks respectively.
+              Each cell of the lists contains a tuple of: (position, peak_value)
         to get the average peak value do: np.mean(max_peaks, 0)[1] on the
         results to unpack one of the lists into x, y coordinates do:
         x, y = zip(*tab)
     """
-    max_peaks = []
-    min_peaks = []
-    dump = []   #Used to pop the first hit which almost always is false
 
-    # check input data
-    x_axis, y_axis = datacheck_peakdetect(x_axis, y_axis)
-    # store data length for later use
+    if y_axis is None:
+        raise (ValueError, 'Input vector y_axis cannot be "None"')
     length = len(y_axis)
 
+    if x_axis is None and y_axis is not None:
+        x_axis = range(length)
+    elif length != len(x_axis):
+        raise (ValueError, 'Input vectors y_axis and x_axis must have same length')
 
-    #perform some checks
-    if lookahead < 1:
-        raise ValueError("Lookahead must be '1' or above in value")
+    if look_ahead < 1:
+        raise ValueError("look_ahead must be equal or larger than '1'")
+
     if not (np.isscalar(delta) and delta >= 0):
         raise ValueError("delta must be a positive number")
 
-    #maxima and minima candidates are temporarily stored in
-    #mx and mn respectively
-    mn, mx = np.Inf, -np.Inf
+    x_axis, y_axis = np.array(x_axis), np.array(y_axis)  # Convert to numpy array if the input is a list
+    max_peaks, min_peaks, dump = [], [], []  # Used to pop the first hit which almost always is false
 
-    #Only detect peak if there is 'lookahead' amount of points after it
-    for index, (x, y) in enumerate(zip(x_axis[:-lookahead],
-                                        y_axis[:-lookahead])):
-        if y > mx:
-            mx = y
-            mxpos = x
-        if y < mn:
-            mn = y
-            mnpos = x
+    minimum, maximum = np.Inf, -np.Inf  # maximum and minimum candidates
 
-        ####look for max####
-        if y < mx-delta and mx != np.Inf:
-            #Maxima peak candidate found
-            #look ahead in signal to ensure that this is a peak and not jitter
-            if y_axis[index:index+lookahead].max() < mx:
-                max_peaks.append([mxpos, mx])
+    # Only detect peak if there is 'look_ahead' amount of points after it
+    for index, (x, y) in enumerate(zip(x_axis[:-look_ahead], y_axis[:-look_ahead])):
+        if y > maximum:
+            maximum, max_pos = y, x
+        if y < minimum:
+            minimum, min_pos = y, x
+
+        # look for max
+        if y < maximum-delta and maximum != np.Inf:
+            if y_axis[index:index+look_ahead].max() < maximum:
+                max_peaks.append([max_pos, maximum])
                 dump.append(True)
-                #set algorithm to only find minima now
-                mx = np.Inf
-                mn = np.Inf
-                if index+lookahead >= length:
-                    #end is within lookahead no more peaks can be found
+                maximum, minimum = np.Inf, np.Inf
+                if index+look_ahead >= length:  # end is within look_ahead -> no more peaks
                     break
                 continue
-            #else:  #slows shit down this does
-            #    mx = ahead
-            #    mxpos = x_axis[np.where(y_axis[index:index+lookahead]==mx)]
 
-        ####look for min####
-        if y > mn+delta and mn != -np.Inf:
-            #Minima peak candidate found
-            #look ahead in signal to ensure that this is a peak and not jitter
-            if y_axis[index:index+lookahead].min() > mn:
-                min_peaks.append([mnpos, mn])
+        # look for min
+        if y > minimum+delta and minimum != -np.Inf:
+            if y_axis[index:index+look_ahead].min() > minimum:
+                min_peaks.append([min_pos, minimum])
                 dump.append(False)
-                #set algorithm to only find maxima now
-                mn = -np.Inf
-                mx = -np.Inf
-                if index+lookahead >= length:
-                    #end is within lookahead no more peaks can be found
+                minimum, maximum = -np.Inf, -np.Inf
+                if index+look_ahead >= length:  # end is within look_ahead -> no more valleys
                     break
-            #else:  #slows shit down this does
-            #    mn = ahead
-            #    mnpos = x_axis[np.where(y_axis[index:index+lookahead]==mn)]
 
-
-    #Remove the false hit on the first value of the y_axis
+    # Remove the false hit on the first value of the y_axis
     try:
         if dump[0]:
             max_peaks.pop(0)
@@ -119,24 +87,9 @@ def detect_peak(y_axis, x_axis=None, lookahead=300, delta=0):
             min_peaks.pop(0)
         del dump
     except IndexError:
-        #no peaks were found, should the function return empty lists?
         pass
 
     return [max_peaks, min_peaks]
-
-
-def datacheck_peakdetect(x_axis, y_axis):
-    if x_axis is None and y_axis is not None:
-        x_axis = range(len(y_axis))
-
-    if y_axis is None:
-        raise (ValueError, 'Input vector y_axis cannot be "None"')
-    elif len(y_axis) != len(x_axis):
-        raise (ValueError, 'Input vectors y_axis and x_axis must have same length')
-
-    # Convert to numpy array if the input is a list
-    x_axis, y_axis  = np.array(x_axis), np.array(y_axis)
-    return x_axis, y_axis
 
 
 def get_spectrum(original_signal):
@@ -175,12 +128,8 @@ def get_averaged_cycle(signal, pip, time, plot_all_cycles=False):
     """
 
     # Get arrays with the indices for every second 'pip' signal
-    pip_peaks_list = detect_peak(pip, lookahead=1e3, delta=2e0)[0]
-    pip_peaks = {'x': np.array([], dtype=int), 'y': np.array([])}
-    for peak in pip_peaks_list:
-        pip_peaks['x'] = np.append(pip_peaks['x'], peak[0])
-        pip_peaks['y'] = np.append(pip_peaks['y'], peak[1])
-    pip_peak_pairs = pip_peaks['x'][0::2]
+    pip_peaks, _ = zip(*detect_peak(pip, look_ahead=1e3, delta=2e0)[0])
+    pip_peak_pairs = pip_peaks[0::2]
     # pip_peak_pairs = pip_peaks['x'][1::2]
 
 
