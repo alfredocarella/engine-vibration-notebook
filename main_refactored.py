@@ -8,12 +8,8 @@ import h5py
 
 __author__ = 'alfredoc'
 
-###############################################
-######## AUXILIARY HANDMADE FUNCTIONS #########
-###############################################
 
-
-def detect_peak(y_axis, x_axis=None, look_ahead=300, delta=0):
+def detect_peak(y_axis, x_axis=None, look_ahead=300, delta=0.0):
     """
     Detects local peaks and valleys in a signal by evaluating every point in a "look_ahead" radius.
 
@@ -110,15 +106,11 @@ def get_spectrum(original_signal):
     return fft_signal
 
 
-def choose_time_interval(long_signal, long_pip, start_time, end_time):
+def get_time_indices(long_time, start_time, end_time):
     # Shorten the signal to the specified time interval
-    start_index = np.where(np.diff(np.sign(long_signal[0] - start_time)))[0]
-    end_index = np.where(np.diff(np.sign(long_signal[0] - end_time)))[0]
-    range_indices = np.arange(start_index, end_index)
-    signal = long_signal[1][np.arange(start_index, end_index)]
-    time = long_signal[0][range_indices] - long_signal[0][start_index]
-    pip = long_pip[1][range_indices]
-    return signal, pip, time
+    start_index = np.where(np.diff(np.sign(long_time - start_time)))[0]
+    end_index = np.where(np.diff(np.sign(long_time - end_time)))[0]
+    return np.arange(start_index, end_index)
 
 
 def get_averaged_cycle(signal, pip, time, plot_all_cycles=False):
@@ -128,19 +120,18 @@ def get_averaged_cycle(signal, pip, time, plot_all_cycles=False):
     """
 
     # Get arrays with the indices for every second 'pip' signal
-    pip_peaks, _ = zip(*detect_peak(pip, look_ahead=1e3, delta=2e0)[0])
+    pip_peaks, _ = zip(*detect_peak(pip, look_ahead=1000, delta=2e0)[0])
     pip_peak_pairs = pip_peaks[0::2]
     # pip_peak_pairs = pip_peaks['x'][1::2]
 
-
     # Normalize each cycle to 720 degrees, interpolate to a common resolution and compute an average cycle
-    number_of_samples = 8192 #  3600
+    number_of_samples = 8192  # 3600
     average_pressure = np.zeros(number_of_samples)
     number_of_cycles = len(pip_peak_pairs) - 1
     for cycle_ in range(number_of_cycles):
         # noinspection PyTypeChecker
         cycle_indices = np.arange(pip_peak_pairs[cycle_], pip_peak_pairs[cycle_ + 1], dtype=int)
-        cycle_time = time[cycle_indices] - time[cycle_indices[0]]  #  Normalizing so t_0 = 0 for this cycle
+        cycle_time = time[cycle_indices] - time[cycle_indices[0]]  # Normalizing so t_0 = 0 for this cycle
         cycle_time_deg = cycle_time * (720.0 / cycle_time[-1])
         cycle_pressure = scipy.interpolate.interp1d(cycle_time_deg, signal[cycle_indices])
         cycle_angle = np.linspace(0, 720, num=number_of_samples, endpoint=False)
@@ -245,46 +236,40 @@ def get_excitation_orders(signal, rpm, max_order, plot_excitation_orders=False):
 
 
 ###############################################
-################# IMPORT DATA #################
+# ######### IMPORT AND PROCESS DATA ######### #
 ###############################################
+
+# 0- IMPORT RELEVANT DATA FROM h5f FILE
 file_name = 'data_100pct.h5'
 data = {}
 with h5py.File(file_name, 'r') as h5f:
     for field in list(h5f):
         data[field] = h5f[field].value
 
-# Import the relevant variables to Python
-signal_yt = [data['time'], data['vibration_amplitude']]
-number_of_points = data['number_of_points']
-PIP = [data['time'], data['pip']]
-sample_rate = data['sample_rate']
-
-
-###############################################
-################ PROCESS DATA #################
-###############################################
-
 start_time, end_time = 50, 55
 
 # 1- NORMALIZE TO 720 DEGREES, INTERPOLATE TO A COMMON RESOLUTION AND GET AVERAGE CYCLE
-signal, pip, time = choose_time_interval(signal_yt, PIP, start_time, end_time)
+range_indices = get_time_indices(data['time'], start_time, end_time)
+signal, pip = data['vibration_amplitude'][range_indices], data['pip'][range_indices]
+time = data['time'][range_indices] - data['time'][range_indices][0]
+
 one_pressure_cycle = get_averaged_cycle(signal, pip, time, plot_all_cycles=False)
 
 # 2- SHIFT SIGNAL REFERENCE TO tdc=0. ADD AN OFFSET TO GET ZERO PRESSURE AT 540deg
-angle_tdc = 58.8  #  Deg
+angle_tdc = 58.8  # Angle in degrees
 shifted_pressure_cycle = apply_time_offset(one_pressure_cycle, angle_tdc)
 # pressure_offset = 2.360 + 0.935  #  = 3.295 [MPa]
-pressure_offset = 0.270 + 0.935 #  = 1.205 [MPa]
+pressure_offset = 0.270 + 0.935  # = 1.205 [MPa]
 shifted_pressure_cycle[1] += pressure_offset
 
 # 3- CONVERTING TO 'TANGENTIAL PRESSURE'
-crank_throw, connecting_rod_length = 0.1075, 0.3925  #  [m]
+crank_throw, connecting_rod_length = 0.1075, 0.3925  # [m]
 conrod_ratio = crank_throw / connecting_rod_length
 tangential_pressure, tangential_modulation = get_tangential_pressure(shifted_pressure_cycle, conrod_ratio)
 
 # 4- CONVERTING TO TORQUE
-cylinder_diameter = 0.170 #  [m]
-instant_torque = get_instant_torque(tangential_pressure, cylinder_diameter, crank_throw, number_of_cylinders = 16)
+cylinder_diameter = 0.170  # [m]
+instant_torque = get_instant_torque(tangential_pressure, cylinder_diameter, crank_throw, number_of_cylinders=16)
 
 # 5- FFT FOR AN INFINITE NUMBER OF CYCLES
 tangential_pressure_orders = get_excitation_orders(tangential_pressure, rpm=1500, max_order=9, plot_excitation_orders=False)
@@ -295,7 +280,7 @@ nauticus_pressure_orders = [25*np.array([0.5, 1.00, 1.5000, 2.000, 2.5000, 3.500
 
 
 ###############################################
-################# PRINT OUTPUT ################
+# ############### PRINT OUTPUT ############## #
 ###############################################
 test_figure = pylab.figure(num=1)
 
@@ -335,7 +320,7 @@ pylab.show(test_figure)
 
 
 ###############################################
-################# EXPORT DATA #################
+# ############### EXPORT DATA ############### #
 ###############################################
 the_file_name = 'my_file1.txt'
 the_file = open(the_file_name, 'w')
