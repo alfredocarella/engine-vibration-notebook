@@ -3,7 +3,6 @@ import numpy as np
 import pylab
 import scipy.fftpack
 import scipy.interpolate
-import scipy.io
 import h5py
 
 __author__ = 'alfredoc'
@@ -106,36 +105,36 @@ def get_spectrum(original_signal):
     return fft_signal
 
 
-def get_averaged_cycle(signal, pip, time, plot_all_cycles=False):
+def get_average_pressure_cycle(signal_array, plot_all_cycles=False):
     """
-    Receives a vibration amplitude vector, the corresponding time vector and a revolution indicator pip.
-    Returns an average of the combustion cycles in the selected interval normalized to degrees.
+    Receives a vibration signal array and returns the average combustion pressure cycle normalized to degrees.
     """
-
-    # Get arrays with the indices for every second 'pip' signal
-    pip_peaks, _ = zip(*detect_peak(pip, look_ahead=1000, delta=2e0)[0])
-    pip_peak_pairs = pip_peaks[0::2]
-    # pip_peak_pairs = pip_peaks['x'][1::2]
+    signal, pip, time, = signal_array['y'], signal_array['pip'], signal_array['t']
+    # Get the time indices for a full 4-stroke cycle
+    zero_angle_indices, dummy_var = zip(*detect_peak(pip, look_ahead=1000, delta=2e0)[0])
+    full_cycle_indices = zero_angle_indices[0::2]
 
     # Normalize each cycle to 720 degrees, interpolate to a common resolution and compute an average cycle
-    number_of_samples = 8192  # 3600
+    number_of_samples = 8192
     average_pressure = np.zeros(number_of_samples)
-    number_of_cycles = len(pip_peak_pairs) - 1
-    for cycle_ in range(number_of_cycles):
-        # noinspection PyTypeChecker
-        cycle_indices = np.arange(pip_peak_pairs[cycle_], pip_peak_pairs[cycle_ + 1], dtype=int)
+    number_of_cycles = len(full_cycle_indices) - 1
+    for cycle_idx in range(number_of_cycles):
+        cycle_indices = np.arange(full_cycle_indices[cycle_idx], full_cycle_indices[cycle_idx + 1], dtype=int)
         cycle_time = time[cycle_indices] - time[cycle_indices[0]]  # Normalizing so t_0 = 0 for this cycle
-        cycle_time_deg = cycle_time * (720.0 / cycle_time[-1])
-        cycle_pressure = scipy.interpolate.interp1d(cycle_time_deg, signal[cycle_indices])
+        cycle_angle = cycle_time * (720.0 / cycle_time[-1])
+        cycle_pressure = scipy.interpolate.interp1d(cycle_angle, signal[cycle_indices])
         cycle_angle = np.linspace(0, 720, num=number_of_samples, endpoint=False)
         single_cycle = cycle_pressure(cycle_angle)
         average_pressure += single_cycle
     average_pressure /= number_of_cycles
-    average_cycle = [cycle_angle, average_pressure]
+    average_cycle = np.array(list(zip(cycle_angle, average_pressure)),
+                      dtype={'names':['angle', 'pressure'], 'formats': ['float', 'float']})
+
+    # average_cycle = [cycle_angle, average_pressure]
 
     if plot_all_cycles:
-        pylab.figure
-        for cycle_ in range(number_of_cycles):
+        pylab.figure()
+        for cycle_idx in range(number_of_cycles):
             pylab.plot(cycle_angle, single_cycle)
         pylab.suptitle("Combustion cycles before averaging", fontsize=20)
         pylab.xlabel('Angle ref. pip signal [deg]')
@@ -147,22 +146,23 @@ def get_averaged_cycle(signal, pip, time, plot_all_cycles=False):
     return average_cycle
 
 
-def apply_time_offset(original_pair, offset_deg):
-    time = original_pair[0]
-    original_signal = original_pair[1]
-    offset_index = np.where(np.diff(np.sign(time - offset_deg)))[0]
-    shifted_signal = original_signal[range(len(original_signal))-offset_index]
-    shifted_pair = [time, shifted_signal]
-    return shifted_pair
+def apply_experimental_setup_corrections(measured_signal, offset_deg, pressure_offset):
+    angle = measured_signal['angle']
+    pressure = measured_signal['pressure']
+    offset_idx = np.where(np.diff(np.sign(angle - offset_deg)))[0]
+    shifted_pressure = pressure[range(len(pressure)) - offset_idx] + pressure_offset
+    corrected_signal = np.array(list(zip(angle, shifted_pressure)),
+                      dtype={'names':['angle', 'pressure'], 'formats': ['float', 'float']})
+    return corrected_signal
 
 
-def get_tangential_pressure(cylinder_pressure_cycle, conrod_ratio):
+def get_tangential_pressure(cylinder_pressure_signal, conrod_ratio):
     # This function makes use of kinematic considerations for converting raw pressure data into tangential pressure
     # Tangential Pressure = Cylinder Pressure * SIN(Crank Angle) * { 1 + lambda * COS(Crank Angle) / SQRT[1 - {lambda * COS(Crank Angle)}**2] }
     # where  = Crank Radius / Connecting Rod Length
 
-    crank_angle = np.radians(cylinder_pressure_cycle[0])
-    cylinder_pressure = cylinder_pressure_cycle[1]
+    crank_angle = np.radians(cylinder_pressure_signal['angle'])
+    cylinder_pressure = cylinder_pressure_signal['pressure']
 
     modulation = np.sin(crank_angle) * (
         1 + conrod_ratio * np.cos(crank_angle) / np.sqrt(1 - (conrod_ratio * np.cos(crank_angle)) ** 2))
@@ -222,36 +222,29 @@ def get_excitation_orders(signal, rpm, max_order, plot_excitation_orders=False):
 # ######### IMPORT AND PROCESS DATA ######### #
 ###############################################
 
-# 0- IMPORT RELEVANT DATA FROM h5f FILE
-file_name = 'data_100pct.h5'
+# 0- IMPORT VIBRATION SIGNAL FROM h5f FILE
+file_name = 'sample_data.h5'
 data = {}
 with h5py.File(file_name, 'r') as h5f:
     for field in list(h5f):
         data[field] = h5f[field].value
 
+vib_signal = np.array(list(zip(data['time'], data['vibration_amplitude'], data['pip'])),
+                      dtype={'names':['t', 'y', 'pip'], 'formats': ['float', 'float', 'float']})
 
 # 1- NORMALIZE TO 720 DEGREES, INTERPOLATE TO A COMMON RESOLUTION AND GET AVERAGE CYCLE
-# choose a time interval with good quality measurements
-start_time, end_time = 50, 55
-start_index = np.where(np.diff(np.sign(data['time'] - start_time)))[0]
-end_index = np.where(np.diff(np.sign(data['time'] - end_time)))[0]
-time_idx = np.arange(start_index, end_index)
-vib_signal = np.array(list(zip(data['time'][time_idx], data['vibration_amplitude'][time_idx], data['pip'][time_idx])),
-                      dtype={'names':['t', 'y', 'pip'], 'formats':['float', 'float', 'float']})
+average_pressure_cycle = get_average_pressure_cycle(vib_signal)
 
-one_pressure_cycle = get_averaged_cycle(vib_signal['y'], vib_signal['pip'], vib_signal['t'], plot_all_cycles=False)
-
-# 2- SHIFT SIGNAL REFERENCE TO tdc=0. ADD AN OFFSET TO GET ZERO PRESSURE AT 540deg
+# 2- SHIFT SIGNAL REFERENCE TO "Top dead center"=0. ADD AN OFFSET TO GET ZERO PRESSURE AT 540deg
 angle_tdc = 58.8  # Angle in degrees
-shifted_pressure_cycle = apply_time_offset(one_pressure_cycle, angle_tdc)
-# pressure_offset = 2.360 + 0.935  #  = 3.295 [MPa]
 pressure_offset = 0.270 + 0.935  # = 1.205 [MPa]
-shifted_pressure_cycle[1] += pressure_offset
+# pressure_offset = 2.360 + 0.935  #  = 3.295 [MPa]
+corrected_pressure_cycle = apply_experimental_setup_corrections(average_pressure_cycle, angle_tdc, pressure_offset)
 
 # 3- CONVERTING TO 'TANGENTIAL PRESSURE'
 crank_throw, connecting_rod_length = 0.1075, 0.3925  # [m]
 conrod_ratio = crank_throw / connecting_rod_length
-tangential_pressure, tangential_modulation = get_tangential_pressure(shifted_pressure_cycle, conrod_ratio)
+tangential_pressure, tangential_modulation = get_tangential_pressure(corrected_pressure_cycle, conrod_ratio)
 
 # 4- CONVERTING TO TORQUE
 cylinder_diameter = 0.170  # [m]
@@ -272,7 +265,7 @@ test_figure = pylab.figure(num=1)
 
 pylab.subplot(3, 1, 1)
 # pylab.plot(one_pressure_cycle[0], one_pressure_cycle[1], label='Average cycle')
-pylab.plot(shifted_pressure_cycle[0], shifted_pressure_cycle[1], 'b', label='Average cycle (tdc=0)')
+pylab.plot(corrected_pressure_cycle[0], corrected_pressure_cycle[1], 'b', label='Average cycle (tdc=0)')
 pylab.plot(tangential_modulation[0], tangential_modulation[1]*10, '--g', label='Tangential modulation')
 pylab.plot(tangential_pressure[0], tangential_pressure[1], 'r', label='Tangential pressure [MPa]')
 pylab.legend(('Average cycle (tdc=0)', 'Tangential modulation (x10)', 'Tangential pressure [MPa]'), loc='best')
@@ -305,36 +298,36 @@ pylab.ylabel('{0}{1}'.format('Tangential pressure harmonics', ' [MPa]'))
 pylab.show(test_figure)
 
 
-###############################################
-# ############### EXPORT DATA ############### #
-###############################################
-the_file_name = 'my_file1.txt'
-the_file = open(the_file_name, 'w')
-
-the_file.write("{0} {1} {2} {3}\n".format('Angle[deg]', 'Tangential_modulation', 'Pressure_cycle_[MPa]', 'Tangential_pressure[MPa]'))
-for item in range(len(tangential_modulation[0])):
-    the_file.write("{0} {1} {2} {3}\n".format(tangential_modulation[0][item], tangential_modulation[1][item], shifted_pressure_cycle[1][item], tangential_pressure[1][item]))
-the_file.close()
-print("Data from exported to file {0}".format(the_file_name))
-
-
-the_file_name = 'my_file2.txt'
-the_file = open(the_file_name, 'w')
-
-the_file.write("{0} {1} {2} {3}\n".format('Frequency[Hz]', 'Measured_harmonics_[MPa]_abs', 'Measured_harmonics_[MPa]_cos', 'Measured_harmonics_[MPa]_sin'))
-for item in range(len(tangential_pressure_orders['freq'])):
-    the_file.write("{0} {1} {2} {3}\n".format(tangential_pressure_orders['freq'][item], tangential_pressure_orders['abs'][item], tangential_pressure_orders['real'][item], tangential_pressure_orders['imag'][item]))
-the_file.close()
-print("Data from exported to file {0}".format(the_file_name))
-
-
-the_file_name = 'my_file3.txt'
-the_file = open(the_file_name, 'w')
-
-the_file.write("{0} {1}\n".format('Frequency[Hz]', 'Nauticus_harmonics_[MPa]_abs'))
-for item in range(len(nauticus_pressure_orders[0])):
-    the_file.write("{0} {1}\n".format(nauticus_pressure_orders[0][item], nauticus_pressure_orders[1][item]))
-the_file.close()
-print("Data from exported to file {0}".format(the_file_name))
-
-
+# ###############################################
+# # ############### EXPORT DATA ############### #
+# ###############################################
+# the_file_name = 'my_file1.txt'
+# the_file = open(the_file_name, 'w')
+#
+# the_file.write("{0} {1} {2} {3}\n".format('Angle[deg]', 'Tangential_modulation', 'Pressure_cycle_[MPa]', 'Tangential_pressure[MPa]'))
+# for item in range(len(tangential_modulation[0])):
+#     the_file.write("{0} {1} {2} {3}\n".format(tangential_modulation[0][item], tangential_modulation[1][item], corrected_pressure_cycle[1][item], tangential_pressure[1][item]))
+# the_file.close()
+# print("Data from exported to file {0}".format(the_file_name))
+#
+#
+# the_file_name = 'my_file2.txt'
+# the_file = open(the_file_name, 'w')
+#
+# the_file.write("{0} {1} {2} {3}\n".format('Frequency[Hz]', 'Measured_harmonics_[MPa]_abs', 'Measured_harmonics_[MPa]_cos', 'Measured_harmonics_[MPa]_sin'))
+# for item in range(len(tangential_pressure_orders['freq'])):
+#     the_file.write("{0} {1} {2} {3}\n".format(tangential_pressure_orders['freq'][item], tangential_pressure_orders['abs'][item], tangential_pressure_orders['real'][item], tangential_pressure_orders['imag'][item]))
+# the_file.close()
+# print("Data from exported to file {0}".format(the_file_name))
+#
+#
+# the_file_name = 'my_file3.txt'
+# the_file = open(the_file_name, 'w')
+#
+# the_file.write("{0} {1}\n".format('Frequency[Hz]', 'Nauticus_harmonics_[MPa]_abs'))
+# for item in range(len(nauticus_pressure_orders[0])):
+#     the_file.write("{0} {1}\n".format(nauticus_pressure_orders[0][item], nauticus_pressure_orders[1][item]))
+# the_file.close()
+# print("Data from exported to file {0}".format(the_file_name))
+#
+#
