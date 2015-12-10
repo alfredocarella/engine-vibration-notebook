@@ -21,7 +21,7 @@ def detect_peak(y_axis, x_axis=None, look_ahead=300, delta=0.0):
                  A good tentative value might be: '(sample_rate / period) / f' where '4 >= f >= 1.25'
     delta -- (optional) this specifies a minimum difference between a peak and
              its surroundings in order to consider it a peak.
-             A good tentative value might be: delta >= RMSnoise * 5.
+             A good tentative value might be: delta >= RMS noise * 5.
     return -- two lists [max_peaks, min_peaks] containing the positive and negative peaks respectively.
               Each cell of the lists contains a tuple of: (position, peak_value)
         to get the average peak value do: np.mean(max_peaks, 0)[1] on the
@@ -57,22 +57,22 @@ def detect_peak(y_axis, x_axis=None, look_ahead=300, delta=0.0):
             minimum, min_pos = y, x
 
         # look for max
-        if y < maximum-delta and maximum != np.Inf:
-            if y_axis[index:index+look_ahead].max() < maximum:
+        if y < maximum - delta and maximum != np.Inf:
+            if y_axis[index: index + look_ahead].max() < maximum:
                 max_peaks.append([max_pos, maximum])
                 dump.append(True)
                 maximum, minimum = np.Inf, np.Inf
-                if index+look_ahead >= length:  # end is within look_ahead -> no more peaks
+                if index + look_ahead >= length:  # end is within look_ahead -> no more peaks
                     break
                 continue
 
         # look for min
-        if y > minimum+delta and minimum != -np.Inf:
-            if y_axis[index:index+look_ahead].min() > minimum:
+        if y > minimum + delta and minimum != -np.Inf:
+            if y_axis[index: index + look_ahead].min() > minimum:
                 min_peaks.append([min_pos, minimum])
                 dump.append(False)
                 minimum, maximum = -np.Inf, -np.Inf
-                if index+look_ahead >= length:  # end is within look_ahead -> no more valleys
+                if index + look_ahead >= length:  # end is within look_ahead -> no more valleys
                     break
 
     # Remove the false hit on the first value of the y_axis
@@ -104,13 +104,6 @@ def get_spectrum(original_signal):
     fft_signal = [frequency_vector, frequency_domain_signal]
 
     return fft_signal
-
-
-def get_time_indices(long_time, start_time, end_time):
-    # Shorten the signal to the specified time interval
-    start_index = np.where(np.diff(np.sign(long_time - start_time)))[0]
-    end_index = np.where(np.diff(np.sign(long_time - end_time)))[0]
-    return np.arange(start_index, end_index)
 
 
 def get_averaged_cycle(signal, pip, time, plot_all_cycles=False):
@@ -217,16 +210,6 @@ def get_excitation_orders(signal, rpm, max_order, plot_excitation_orders=False):
         excitation_peaks['real'] = np.append(excitation_peaks['real'], (short_excitation_fft[1][peak]).real)
         excitation_peaks['imag'] = np.append(excitation_peaks['imag'], (short_excitation_fft[1][peak]).imag)
 
-    # freq_resolution = short_excitation_fft[0][1] - short_excitation_fft[0][0]
-    # print("freq_resolution = %r" % freq_resolution)
-    # print("1 / freq_resolution = %r" % (1.0 / freq_resolution))
-    # print("n_samples = %r " % len(excitation_fft[0]))
-    # print("freq_resolution * n_samples = %r" % (freq_resolution * len(excitation_fft[0])))
-    # print("1 / freq_resolution * n_samples = %r\n\n\n" % (1.0 / freq_resolution * len(excitation_fft[0])))
-    # print("\n\n\nshort_excitation_fft[0] = %r" % short_excitation_fft[0])
-    # print("\n\n\nabs(short_excitation_fft[1]) = %r" % abs(short_excitation_fft[1]))
-    # print("peak_index_list = %r" % peak_index_list)
-
     if plot_excitation_orders:
         pylab.figure(3)
         pylab.plot(short_excitation_fft[0], abs(short_excitation_fft[1]))
@@ -246,14 +229,17 @@ with h5py.File(file_name, 'r') as h5f:
     for field in list(h5f):
         data[field] = h5f[field].value
 
-start_time, end_time = 50, 55
 
 # 1- NORMALIZE TO 720 DEGREES, INTERPOLATE TO A COMMON RESOLUTION AND GET AVERAGE CYCLE
-range_indices = get_time_indices(data['time'], start_time, end_time)
-signal, pip = data['vibration_amplitude'][range_indices], data['pip'][range_indices]
-time = data['time'][range_indices] - data['time'][range_indices][0]
+# choose a time interval with good quality measurements
+start_time, end_time = 50, 55
+start_index = np.where(np.diff(np.sign(data['time'] - start_time)))[0]
+end_index = np.where(np.diff(np.sign(data['time'] - end_time)))[0]
+time_idx = np.arange(start_index, end_index)
+vib_signal = np.array(list(zip(data['time'][time_idx], data['vibration_amplitude'][time_idx], data['pip'][time_idx])),
+                      dtype={'names':['t', 'y', 'pip'], 'formats':['float', 'float', 'float']})
 
-one_pressure_cycle = get_averaged_cycle(signal, pip, time, plot_all_cycles=False)
+one_pressure_cycle = get_averaged_cycle(vib_signal['y'], vib_signal['pip'], vib_signal['t'], plot_all_cycles=False)
 
 # 2- SHIFT SIGNAL REFERENCE TO tdc=0. ADD AN OFFSET TO GET ZERO PRESSURE AT 540deg
 angle_tdc = 58.8  # Angle in degrees
